@@ -8,7 +8,7 @@ import os
 from transformers import CLIPProcessor, CLIPModel
 from copy import deepcopy
 import torch 
-from ldm.util import default_device, instantiate_from_config
+from ldm.util import instantiate_from_config
 from trainer import read_official_ckpt, batch_to_device
 from evaluator import set_alpha_scale, save_images, draw_masks_from_boxes
 import numpy as np
@@ -18,7 +18,7 @@ import torchvision.transforms.functional as F
 import random
 
 
-device = default_device()
+device = "cuda"
 
 
 def alpha_generator(length, type=[1,0,0]):
@@ -65,21 +65,25 @@ def draw_box(img, locations):
         draw.rectangle([box[0]*WW, box[1]*HH, box[2]*WW, box[3]*HH], outline =colors[bid % len(colors)], width=5)
     return img 
 
-def load_ckpt(config, state_dict):
-    model = instantiate_from_config(config.model).to(device).eval()
+def load_common_ckpt(config, common_ckpt):
     autoencoder = instantiate_from_config(config.autoencoder).to(device).eval()
     text_encoder = instantiate_from_config(config.text_encoder).to(device).eval()
     diffusion = instantiate_from_config(config.diffusion).to(device)
 
-    autoencoder.load_state_dict( state_dict["autoencoder"]  )
-    text_encoder.load_state_dict( state_dict["text_encoder"]  )
-    diffusion.load_state_dict( state_dict["diffusion"]  )
+    autoencoder.load_state_dict( common_ckpt["autoencoder"]  )
+    text_encoder.load_state_dict( common_ckpt["text_encoder"]  )
+    diffusion.load_state_dict( common_ckpt["diffusion"]  )
+
+    return [autoencoder, text_encoder, diffusion]
+
+def load_ckpt(config, state_dict, common_instances):
+    model = instantiate_from_config(config.model).to(device).eval()
 
     model.load_state_dict(state_dict['model'])
     set_alpha_scale(model, config.alpha_scale)
     print("ckpt is loaded")
 
-    return model, autoencoder, text_encoder, diffusion
+    return [model] + common_instances
 
 
 
@@ -100,21 +104,21 @@ def get_clip_feature(model, processor, input, is_image=False):
     if is_image:
         image = input #Image.open(input).convert("RGB")
         inputs = processor(images=[image],  return_tensors="pt", padding=True)
-        inputs['pixel_values'] = inputs['pixel_values'].to(device) # we use our own preprocessing without center_crop 
-        inputs['input_ids'] = torch.tensor([[0,1,2,3]]).to(device)  # placeholder
+        inputs['pixel_values'] = inputs['pixel_values'].cuda() # we use our own preprocessing without center_crop 
+        inputs['input_ids'] = torch.tensor([[0,1,2,3]]).cuda()  # placeholder
         outputs = model(**inputs)
         feature = outputs.image_embeds 
         if feature_type[1] == 'after_renorm':
             feature = feature*28.7
         if feature_type[1] == 'after_reproject':
-            feature = project( feature, torch.load('gligen/projection_matrix').to(device).T ).squeeze(0)
+            feature = project( feature, torch.load('gligen/projection_matrix.pth').cuda().T ).squeeze(0)
             feature = ( feature / feature.norm() )  * 28.7 
             feature = feature.unsqueeze(0)
     else:
         inputs = processor(text=input,  return_tensors="pt", padding=True)
-        inputs['input_ids'] = inputs['input_ids'].to(device)
-        inputs['pixel_values'] = torch.ones(1,3,224,224).to(device) # placeholder 
-        inputs['attention_mask'] = inputs['attention_mask'].to(device)
+        inputs['input_ids'] = inputs['input_ids'].cuda()
+        inputs['pixel_values'] = torch.ones(1,3,224,224).cuda() # placeholder 
+        inputs['attention_mask'] = inputs['attention_mask'].cuda()
         outputs = model(**inputs)
         feature = outputs.text_embeds if feature_type[0] == 'after' else outputs.text_model_output.pooler_output
     return feature
@@ -139,7 +143,7 @@ def fire_clip(text_encoder, meta, batch=1, max_objs=30, clip_model=None):
 
     if clip_model is None:
         version = "openai/clip-vit-large-patch14"
-        model = CLIPModel.from_pretrained(version).to(device)
+        model = CLIPModel.from_pretrained(version).cuda()
         processor = CLIPProcessor.from_pretrained(version)
     else:
         version = "openai/clip-vit-large-patch14"
@@ -219,14 +223,14 @@ def grounded_generation_box(loaded_model_list, instruction, *args, **kwargs):
     inpainting_mask = x0 = None # used for inpainting
     if is_inpaint:       
         input_image = F.pil_to_tensor(  instruction["input_image"] ) 
-        input_image = ( input_image.float().unsqueeze(0).to(device) / 255 - 0.5 ) / 0.5
+        input_image = ( input_image.float().unsqueeze(0).cuda() / 255 - 0.5 ) / 0.5
         x0 = autoencoder.encode( input_image )
         if instruction["actual_mask"] is not None:
-            inpainting_mask = instruction["actual_mask"][None, None].expand(batch['boxes'].shape[0], -1, -1, -1).to(device)
+            inpainting_mask = instruction["actual_mask"][None, None].expand(batch['boxes'].shape[0], -1, -1, -1).cuda()
         else:
-            # inpainting_mask = draw_masks_from_boxes( batch['boxes'], (x0.shape[-2], x0.shape[-1])  ).to(device)
+            # inpainting_mask = draw_masks_from_boxes( batch['boxes'], (x0.shape[-2], x0.shape[-1])  ).cuda()
             actual_boxes = [instruction['inpainting_boxes_nodrop'] for _ in range(batch['boxes'].shape[0])]
-            inpainting_mask = draw_masks_from_boxes(actual_boxes, (x0.shape[-2], x0.shape[-1])  ).to(device)
+            inpainting_mask = draw_masks_from_boxes(actual_boxes, (x0.shape[-2], x0.shape[-1])  ).cuda()
         # extra input for the model 
         masked_x0 = x0*inpainting_mask
         inpainting_extra_input = torch.cat([masked_x0,inpainting_mask], dim=1)
@@ -249,34 +253,15 @@ def grounded_generation_box(loaded_model_list, instruction, *args, **kwargs):
 
 
     # ------------- other logistics ------------- #
-    os.makedirs( os.path.join(save_folder, 'images'), exist_ok=True)
-    os.makedirs( os.path.join(save_folder, 'layout'), exist_ok=True)
-    os.makedirs( os.path.join(save_folder, 'overlay'), exist_ok=True)
-
-    start = len(  os.listdir(os.path.join(save_folder, 'images')) )
-    image_ids = list(range(start,start+batch_size))
-    print(image_ids)
 
     sample_list = []
-    overlay_list = []
-    for image_id, sample in zip(image_ids, samples_fake):
-        # save in local
-        img_name = str(int(image_id))+'.png'
-
+    for sample in samples_fake:
         sample = torch.clamp(sample, min=-1, max=1) * 0.5 + 0.5
         sample = sample.cpu().numpy().transpose(1,2,0) * 255 
         sample = Image.fromarray(sample.astype(np.uint8))
-
-        overlay = draw_box(sample.copy(), instruction['locations'])
-
-        sample.save(os.path.join(save_folder, "images", img_name))
-        overlay.save(os.path.join(save_folder, "overlay", img_name))
-
-        # demo output 
         sample_list.append(sample)
-        overlay_list.append(overlay)
 
-    return sample_list, overlay_list
+    return sample_list, None
         
 
 

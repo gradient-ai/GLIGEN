@@ -30,7 +30,7 @@ elif device == "mps":
 def parse_option():
     parser = argparse.ArgumentParser('GLIGen Demo', add_help=False)
     parser.add_argument("--folder", type=str,  default="create_samples", help="path to OUTPUT")
-    parser.add_argument("--official_ckpt", type=str,  default='ckpts/sd-v1-4.ckpt', help="")
+    parser.add_argument("--official_ckpt", type=str,  default='./Deliberate', help="")
     parser.add_argument("--guidance_scale", type=float,  default=5, help="")
     parser.add_argument("--alpha_scale", type=float,  default=1, help="scale tanh(alpha). If 0, the behaviour is same as original model")
     parser.add_argument("--load-text-box-generation", type=arg_bool, default=True, help="Load text-box generation pipeline.")
@@ -761,6 +761,6 @@ with Blocks(
         )
 
 main.queue(concurrency_count=1, api_open=False)
-main.launch(share=False, show_api=False)
+main.launch(share=True)
 
 

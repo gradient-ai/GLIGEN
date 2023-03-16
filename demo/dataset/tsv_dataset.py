@@ -190,7 +190,7 @@ class TSVDataset(BaseDataset):
         self.which_layer_image = which_layer[1]
 
         #self.projection_matrix = torch.load(os.path.join(os.path.dirname(__file__), 'projection_matrix')  )
-        self.projection_matrix = torch.load('projection_matrix')
+        self.projection_matrix = torch.load('projection_matrix.pth')
 
         # Load tsv data
         self.tsv_file = TSVFile(self.tsv_path)
