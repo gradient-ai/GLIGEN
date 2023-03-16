@@ -3,7 +3,6 @@ import torch
 import argparse
 from omegaconf import OmegaConf
 from gligen.task_grounded_generation import grounded_generation_box, load_ckpt
-from ldm.util import default_device
 
 import json
 import numpy as np
@@ -19,7 +18,7 @@ from huggingface_hub import hf_hub_download
 hf_hub_download = partial(hf_hub_download, library_name="gligen_demo")
 
 arg_bool = lambda x: x.lower() == 'true'
-device = default_device()
+device = 'cuda'
 
 print(f"GLIGEN uses {device.upper()} device.")
 if device == "cpu":
