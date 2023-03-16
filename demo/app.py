@@ -3,6 +3,7 @@ import torch
 import argparse
 from omegaconf import OmegaConf
 from gligen.task_grounded_generation import grounded_generation_box, load_ckpt
+from ldm.util import default_device
 
 import json
 import numpy as np
@@ -18,7 +19,7 @@ from huggingface_hub import hf_hub_download
 hf_hub_download = partial(hf_hub_download, library_name="gligen_demo")
 
 arg_bool = lambda x: x.lower() == 'true'
-device = 'cuda'
+device = default_device()
 
 print(f"GLIGEN uses {device.upper()} device.")
 if device == "cpu":
@@ -29,7 +30,7 @@ elif device == "mps":
 def parse_option():
     parser = argparse.ArgumentParser('GLIGen Demo', add_help=False)
     parser.add_argument("--folder", type=str,  default="create_samples", help="path to OUTPUT")
-    parser.add_argument("--official_ckpt", type=str,  default='./Deliberate', help="")
+    parser.add_argument("--official_ckpt", type=str,  default='runwayml/stable-diffusion-v1-5', help="")
     parser.add_argument("--guidance_scale", type=float,  default=5, help="")
     parser.add_argument("--alpha_scale", type=float,  default=1, help="scale tanh(alpha). If 0, the behaviour is same as original model")
     parser.add_argument("--load-text-box-generation", type=arg_bool, default=True, help="Load text-box generation pipeline.")
